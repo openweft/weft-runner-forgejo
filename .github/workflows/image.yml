@@ -1,0 +1,95 @@
+name: image
+
+on:
+  # Manual trigger during dev — `gh workflow run image.yml` or the web UI.
+  workflow_dispatch:
+  # Auto-publish only on a release tag (v0.1.0, v1.0.0, …). The branch
+  # push trigger was removed deliberately so dev commits to main don't
+  # publish images. Re-enable on a per-need basis if a CI smoke-test
+  # against the freshly-built image becomes useful.
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ghcr.io/${{ github.repository_owner }}/weft-runner-forgejo
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+          - platform: linux/arm64
+            arch: arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute short SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >>"$GITHUB_OUTPUT"
+
+      - name: Build + push (${{ matrix.arch }})
+        uses: docker/build-push-action@v5
+        with:
+          context: image
+          file: image/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:latest-${{ matrix.arch }}
+            ${{ env.IMAGE }}:${{ steps.sha.outputs.short }}-${{ matrix.arch }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+  manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute short SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >>"$GITHUB_OUTPUT"
+
+      - name: Assemble multi-arch manifest (latest + sha)
+        env:
+          IMAGE: ${{ env.IMAGE }}
+          SHORT: ${{ steps.sha.outputs.short }}
+        run: |
+          set -eux
+          for TAG in latest "${SHORT}"; do
+            docker buildx imagetools create \
+              --tag "${IMAGE}:${TAG}" \
+              "${IMAGE}:latest-amd64" \
+              "${IMAGE}:latest-arm64"
+          done

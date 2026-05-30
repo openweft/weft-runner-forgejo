@@ -1,0 +1,4 @@
+# Build context is image/ only; ignore the parent Go module.
+*
+!Dockerfile
+!runner-init.sh

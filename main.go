@@ -1,12 +1,15 @@
-// Command weft-runner-forgejo wires the cobra entry point. The
-// daemon/lifecycle code lives in runner/, the Forgejo CI integration in
-// runner/github.go, and the per-job microVM logic in runner/job.go. See
+// Command weft-runner-forgejo wires the cobra entry point. The daemon /
+// lifecycle code lives in runner/, the Forgejo Connect RPC integration in
+// runner/forgejo.go, and the per-job microVM logic in runner/job.go. See
 // doc.go for the design intent.
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/openweft/weft-runner-forgejo/runner"
 	"github.com/spf13/cobra"
@@ -15,7 +18,7 @@ import (
 func main() {
 	root := &cobra.Command{
 		Use:   "weft-runner-forgejo",
-		Short: "Self-hosted Forgejo CI runner backed by weft ephemeral microVMs",
+		Short: "Self-hosted Forgejo/Gitea Actions runner backed by weft ephemeral microVMs",
 	}
 	root.AddCommand(registerCmd(), runCmd())
 	if err := root.Execute(); err != nil {
@@ -24,59 +27,61 @@ func main() {
 	}
 }
 
-// registerCmd is the one-shot "obtain a registration token and persist a
-// runner config" step. Distinct from `run` so an operator can re-register
-// against a different scope without leaking the old token into the daemon's
-// memory.
+// registerCmd exchanges a Forgejo registration token for a runner UUID +
+// token via the Connect RPC RunnerService.Register endpoint and persists
+// the credential to disk. The op mints the registration token in Forgejo's
+// Site Administration → Actions → Runners page.
 func registerCmd() *cobra.Command {
-	var owner, repo, token, configFile string
+	var url, regToken, name, configFile string
 	var labels []string
 	cmd := &cobra.Command{
 		Use:   "register",
-		Short: "Register against an org or org/repo and write a runner config to disk",
-		Long: `Mints a registration token via the Forgejo REST API
-(/orgs/<owner>/actions/runners/registration-token, or .../repos/<owner>/<repo>/...
-for the repo-scoped variant) and writes a JSON runner config to --config.
-The config is then read by ` + "`run`" + ` to dial back into Forgejo.`,
+		Short: "Exchange a Forgejo registration token for a runner credential and persist it",
+		Long: `Calls /api/actions/runner.v1.RunnerService/Register with the registration
+token you minted in Forgejo's admin UI and writes the returned UUID + long-
+lived token to --config. ` + "`run`" + ` reads that config to long-poll for tasks.`,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return runner.Register(runner.RegisterOptions{
-				Owner:      owner,
-				Repo:       repo,
-				Token:      token,
-				Labels:     labels,
-				ConfigFile: configFile,
+				URL:               url,
+				RegistrationToken: regToken,
+				Name:              name,
+				Labels:            labels,
+				ConfigFile:        configFile,
 			})
 		},
 	}
-	cmd.Flags().StringVar(&owner, "owner", "", "Forgejo org or user that owns the runner scope (required)")
-	cmd.Flags().StringVar(&repo, "repo", "", "Optional repo name; empty = org-wide runner")
-	cmd.Flags().StringVar(&token, "token", "", "PAT or Forgejo App installation token used to mint the runner registration token (required)")
-	cmd.Flags().StringSliceVar(&labels, "labels", []string{"weft", "microvm"}, "Labels exposed to workflow runs-on filters")
+	cmd.Flags().StringVar(&url, "url", "", "Forgejo base URL (e.g. https://codeberg.org) — required")
+	cmd.Flags().StringVar(&regToken, "registration-token", "", "Registration token minted in the Forgejo admin UI (required)")
+	cmd.Flags().StringVar(&name, "name", "", "Runner display name (default: weft-<os>-<arch>)")
+	cmd.Flags().StringSliceVar(&labels, "labels", []string{"weft", "microvm"}, "Labels matched by workflows' `runs-on:` filters")
 	cmd.Flags().StringVar(&configFile, "config", "weft-runner-forgejo.json", "Path to write the persisted runner config")
 	return cmd
 }
 
-// runCmd is the long-lived daemon: read the config minted by `register`,
-// long-poll Forgejo for job assignments, spawn a fresh microVM per job through
-// the weft cluster, stream logs, mark done.
+// runCmd boots the long-lived daemon. SIGTERM/SIGINT trigger context
+// cancellation so the runner drains in-flight tasks cleanly.
 func runCmd() *cobra.Command {
 	var configFile, weftEndpoint, image string
-	var idleTimeoutSecs int
+	var concurrency, pollInterval int
 	cmd := &cobra.Command{
 		Use:   "run",
-		Short: "Long-lived runner loop — poll Forgejo, dispatch jobs into microVMs",
-		RunE: func(c *cobra.Command, _ []string) error {
-			return runner.Run(c.Context(), runner.RunOptions{
-				ConfigFile:    configFile,
-				WeftEndpoint:  weftEndpoint,
-				Image:         image,
-				IdleTimeout:   idleTimeoutSecs,
+		Short: "Long-lived runner loop — poll Forgejo, dispatch tasks into microVMs",
+		RunE: func(_ *cobra.Command, _ []string) error {
+			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+			defer stop()
+			return runner.Run(ctx, runner.RunOptions{
+				ConfigFile:   configFile,
+				WeftEndpoint: weftEndpoint,
+				Image:        image,
+				Concurrency:  concurrency,
+				PollInterval: pollInterval,
 			})
 		},
 	}
 	cmd.Flags().StringVar(&configFile, "config", "weft-runner-forgejo.json", "Runner config written by `register`")
 	cmd.Flags().StringVar(&weftEndpoint, "weft-endpoint", "", "weft control-plane target — unix:/path or tcp:host:port (required)")
-	cmd.Flags().StringVar(&image, "image", "", "OCI image ref used as the per-job microVM rootfs (required)")
-	cmd.Flags().IntVar(&idleTimeoutSecs, "idle-timeout", 0, "Exit after this many seconds with no job assignment (0 = no timeout)")
+	cmd.Flags().StringVar(&image, "image", "", "OCI image ref used as the per-task microVM rootfs fallback (required)")
+	cmd.Flags().IntVar(&concurrency, "concurrency", 1, "Maximum in-flight tasks (microVMs)")
+	cmd.Flags().IntVar(&pollInterval, "poll-interval", 3, "Seconds between FetchTask long-polls when idle")
 	return cmd
 }

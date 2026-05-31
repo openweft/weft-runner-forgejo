@@ -177,26 +177,55 @@ func (f *fj) declare(ctx context.Context, labels []string) (declareResp, error) 
 	return out, err
 }
 
-// TaskSummary is the *minimal* projection of RunnerService.FetchTask's
-// Task message — just enough to drive job.go. The real Task carries the
-// workflow yaml, all variables/secrets/services, container config, etc.
-// Extending this struct is a per-feature exercise once the runner picks
-// up real workloads.
+// TaskSummary is our hand-tracked projection of RunnerService.FetchTask's
+// `runner.v1.Task` message. We mirror the upstream proto field names (and
+// the proto-JSON snake_case wire shape) so that, when Forgejo bumps the
+// schema, the diff is a localised one-struct exercise rather than a
+// codegen-graph reshuffle.
+//
+// Canonical proto:
+//
+//	https://code.forgejo.org/forgejo/runner/src/branch/main/internal/pkg/client/runner/runner.proto
+//
+// Look there first when the agent reports a field it doesn't understand.
+// Add the field below with the matching json tag; both wire decode (in
+// fetchTask) and cfg-share serialisation (in job.go) flow through this
+// struct, so no other site needs touching.
+//
+// Image is preserved as a struct (matches proto's `Image { string name; }`)
+// while staying backwards-compatible with the previous flat `image` tag —
+// the older flat shape is dropped, callers using task.Image.Name. The
+// in-VM agent has always read the field via its decoded value, not via
+// the wire tag, so the rename is internal.
 type TaskSummary struct {
-	ID      int64  `json:"id"`
-	Token   string `json:"token"`
-	Image   string `json:"image"` // empty if the workflow doesn't pin one
-	Workflow string `json:"workflow"`
+	ID           int64             `json:"id"`
+	Token        string            `json:"token"`
+	Workflow     string            `json:"workflow_payload"` // raw YAML
+	Context      map[string]any    `json:"context,omitempty"`
+	Secrets      map[string]string `json:"secrets,omitempty"`
+	Vars         map[string]string `json:"vars,omitempty"`
+	Machine      string            `json:"machine,omitempty"`
+	Event        string            `json:"event,omitempty"`         // push|pull_request|…
+	EventPayload string            `json:"event_payload,omitempty"` // raw JSON of the trigger event
+	Concurrency  *Concurrency      `json:"concurrency,omitempty"`
+	Image        struct {
+		Name string `json:"name"`
+	} `json:"image"`
+}
+
+// Concurrency mirrors the proto's nested Concurrency message (group +
+// cancel-in-progress flag, same semantics as upstream GitHub Actions).
+type Concurrency struct {
+	Group            string `json:"group,omitempty"`
+	CancelInProgress bool   `json:"cancel_in_progress,omitempty"`
 }
 
 // fetchTask long-polls for an assigned task. Returns (nil, nil) when no
 // task is available — that's idle, callers back off and retry.
 //
-// TODO(milestone-real-fetchtask): the proto for FetchTask carries optional
-// nested messages we don't yet model (event payload, container config,
-// services, dependencies). Today we parse only the top-level fields above;
-// the rest is silently dropped. Land the proto vendoring + a fuller
-// TaskSummary in a follow-up before claiming we run real workloads.
+// The TaskSummary above is hand-tracked against the upstream
+// `runner.v1.Task` proto; see the comment on TaskSummary for the canonical
+// URL and the protocol for adding fields.
 func (f *fj) fetchTask(ctx context.Context) (*TaskSummary, error) {
 	var out struct {
 		Task *TaskSummary `json:"task"`

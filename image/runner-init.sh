@@ -23,11 +23,28 @@ while [ ! -s "${CFG_FILE}" ]; do
     sleep 0.2
 done
 
-URL=$(jq -r '.url'        <"${CFG_FILE}")
-UUID=$(jq -r '.uuid'      <"${CFG_FILE}")
-TOKEN=$(jq -r '.token'    <"${CFG_FILE}")
-TASK_ID=$(jq -r '.task_id' <"${CFG_FILE}")
+URL=$(jq -r '.url'                   <"${CFG_FILE}")
+UUID=$(jq -r '.uuid'                 <"${CFG_FILE}")
+TOKEN=$(jq -r '.token'               <"${CFG_FILE}")
+TASK_ID=$(jq -r '.task_id'           <"${CFG_FILE}")
+TASK_TOKEN=$(jq -r '.task_token // ""' <"${CFG_FILE}")
+EVENT=$(jq -r '.event // ""'         <"${CFG_FILE}")
+MACHINE=$(jq -r '.machine // ""'     <"${CFG_FILE}")
+WORKFLOW_BYTES=$(jq -r '.workflow_payload // ""' <"${CFG_FILE}" | wc -c)
+EVENT_PAYLOAD_BYTES=$(jq -r '.event_payload // ""' <"${CFG_FILE}" | wc -c)
+CONTEXT_KEYS=$(jq -r '(.context // {}) | keys | join(",")' <"${CFG_FILE}")
+VARS_KEYS=$(jq -r '(.vars // {}) | keys | join(",")'       <"${CFG_FILE}")
+SECRETS_KEYS=$(jq -r '(.secrets // {}) | keys | join(",")' <"${CFG_FILE}")
+CONCURRENCY_GROUP=$(jq -r '.concurrency.group // ""'              <"${CFG_FILE}")
+CONCURRENCY_CANCEL=$(jq -r '.concurrency.cancel_in_progress // false' <"${CFG_FILE}")
+
 log "task_id=${TASK_ID} uuid=${UUID} url=${URL} token=<${#TOKEN} chars>"
+log "task_token=<${#TASK_TOKEN} chars> event=${EVENT} machine=${MACHINE}"
+log "workflow_payload=<${WORKFLOW_BYTES} bytes> event_payload=<${EVENT_PAYLOAD_BYTES} bytes>"
+log "context_keys=[${CONTEXT_KEYS}] vars_keys=[${VARS_KEYS}]"
+# secrets are masked: only key names are logged, never values.
+log "secrets=<masked> keys=[${SECRETS_KEYS}]"
+log "concurrency group=${CONCURRENCY_GROUP} cancel_in_progress=${CONCURRENCY_CANCEL}"
 
 # TODO(milestone-real-dispatch): forgejo-runner's CLI only exposes daemon mode
 # (`forgejo-runner daemon`) which re-registers with the server and long-polls

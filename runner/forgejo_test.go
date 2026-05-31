@@ -158,7 +158,7 @@ func TestFetchTask_HappyPath(t *testing.T) {
 	srv := mountConnect(t, map[string]http.HandlerFunc{
 		"FetchTask": func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"task":{"id":99,"token":"tt","image":"img","workflow":"wf"}}`))
+			_, _ = w.Write([]byte(`{"task":{"id":99,"token":"tt","image":{"name":"img"},"workflow_payload":"wf"}}`))
 		},
 	})
 	defer srv.Close()
@@ -169,8 +169,80 @@ func TestFetchTask_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetchTask: %v", err)
 	}
-	if task == nil || task.ID != 99 || task.Token != "tt" || task.Image != "img" || task.Workflow != "wf" {
+	if task == nil || task.ID != 99 || task.Token != "tt" || task.Image.Name != "img" || task.Workflow != "wf" {
 		t.Fatalf("unexpected task: %+v", task)
+	}
+}
+
+// TestFetchTask_FullProtoShape exercises every field we mirror from
+// runner.v1.Task. If Forgejo bumps the proto and we add a tag to
+// TaskSummary, extend the body here too — this test is the contract.
+func TestFetchTask_FullProtoShape(t *testing.T) {
+	body := `{
+	  "task": {
+	    "id": 42,
+	    "token": "tt",
+	    "workflow_payload": "name: ci\non: push\njobs: {}\n",
+	    "context": {"repository": "owner/repo", "run_id": 7},
+	    "secrets": {"GH_TOKEN": "shhh", "NPM_TOKEN": "psst"},
+	    "vars": {"ENV": "prod"},
+	    "machine": "ubuntu-22.04",
+	    "event": "push",
+	    "event_payload": "{\"ref\":\"refs/heads/main\"}",
+	    "concurrency": {"group": "ci-main", "cancel_in_progress": true},
+	    "image": {"name": "ghcr.io/example/img:latest"}
+	  }
+	}`
+	srv := mountConnect(t, map[string]http.HandlerFunc{
+		"FetchTask": func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(body))
+		},
+	})
+	defer srv.Close()
+
+	f := newTestFJ(srv)
+	f.uuid, f.token = "u", "t"
+	task, err := f.fetchTask(context.Background())
+	if err != nil {
+		t.Fatalf("fetchTask: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected task, got nil")
+	}
+	if task.ID != 42 || task.Token != "tt" {
+		t.Errorf("id/token: got id=%d token=%q", task.ID, task.Token)
+	}
+	if task.Workflow != "name: ci\non: push\njobs: {}\n" {
+		t.Errorf("workflow_payload: got %q", task.Workflow)
+	}
+	if task.Context["repository"] != "owner/repo" {
+		t.Errorf("context.repository: got %v", task.Context["repository"])
+	}
+	// JSON numbers decode to float64 into map[string]any.
+	if v, ok := task.Context["run_id"].(float64); !ok || v != 7 {
+		t.Errorf("context.run_id: got %v (%T)", task.Context["run_id"], task.Context["run_id"])
+	}
+	if task.Secrets["GH_TOKEN"] != "shhh" || task.Secrets["NPM_TOKEN"] != "psst" {
+		t.Errorf("secrets: %+v", task.Secrets)
+	}
+	if task.Vars["ENV"] != "prod" {
+		t.Errorf("vars: %+v", task.Vars)
+	}
+	if task.Machine != "ubuntu-22.04" {
+		t.Errorf("machine: got %q", task.Machine)
+	}
+	if task.Event != "push" {
+		t.Errorf("event: got %q", task.Event)
+	}
+	if task.EventPayload != `{"ref":"refs/heads/main"}` {
+		t.Errorf("event_payload: got %q", task.EventPayload)
+	}
+	if task.Concurrency == nil || task.Concurrency.Group != "ci-main" || !task.Concurrency.CancelInProgress {
+		t.Errorf("concurrency: %+v", task.Concurrency)
+	}
+	if task.Image.Name != "ghcr.io/example/img:latest" {
+		t.Errorf("image.name: got %q", task.Image.Name)
 	}
 }
 

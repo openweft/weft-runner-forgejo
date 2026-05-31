@@ -7,19 +7,32 @@
 // workflow definition + send back log rows over the same Connect-over-JSON
 // channel.
 //
-// The in-VM agent contract (forgejo-task.json):
+// The in-VM agent contract (forgejo-task.json) mirrors `runner.v1.Task`
+// (see runner/forgejo.go's TaskSummary for the proto source-of-truth):
 //
 //	{
-//	  "url":       "<forgejo base>",
-//	  "uuid":      "<runner uuid>",
-//	  "token":     "<runner token>",
-//	  "task_id":   <int>,
-//	  "task_token": "<task-scoped token>"
+//	  "url":              "<forgejo base>",
+//	  "uuid":             "<runner uuid>",
+//	  "token":            "<runner token>",
+//	  "task_id":          <int>,
+//	  "task_token":       "<task-scoped token>",
+//	  "workflow_payload": "<raw workflow YAML>",
+//	  "context":          { ... job-level context vars ... },
+//	  "secrets":          { ... secret name → value ... },
+//	  "vars":             { ... var name → value ... },
+//	  "machine":          "<machine label>",
+//	  "event":            "push|pull_request|…",
+//	  "event_payload":    "<raw JSON of the trigger event>",
+//	  "concurrency":      { "group": "...", "cancel_in_progress": <bool> }
 //	}
 //
 // The agent reads this off `/run/weft/cfg/forgejo-task.json`, executes the
 // workflow steps, and reports back over the same protocol. The daemon side
 // only owns the VM lifecycle.
+//
+// Backwards compatibility: agents reading only the smaller five-field
+// projection (url/uuid/token/task_id/task_token) continue to work — the
+// new fields are additive, all `omitempty` so absent inputs stay absent.
 
 package runner
 
@@ -35,13 +48,23 @@ import (
 )
 
 // taskCfg is the JSON file we drop on the cfg share for the in-VM agent.
+// Field names mirror `runner.v1.Task`'s proto-JSON shape (see TaskSummary
+// in runner/forgejo.go). New fields are additive + omitempty so older
+// in-VM agents that only read the five baseline fields keep working.
 type taskCfg struct {
-	URL       string `json:"url"`
-	UUID      string `json:"uuid"`
-	Token     string `json:"token"`
-	TaskID    int64  `json:"task_id"`
-	TaskToken string `json:"task_token"`
-	Workflow  string `json:"workflow,omitempty"`
+	URL          string            `json:"url"`
+	UUID         string            `json:"uuid"`
+	Token        string            `json:"token"`
+	TaskID       int64             `json:"task_id"`
+	TaskToken    string            `json:"task_token"`
+	Workflow     string            `json:"workflow_payload,omitempty"`
+	Context      map[string]any    `json:"context,omitempty"`
+	Secrets      map[string]string `json:"secrets,omitempty"`
+	Vars         map[string]string `json:"vars,omitempty"`
+	Machine      string            `json:"machine,omitempty"`
+	Event        string            `json:"event,omitempty"`
+	EventPayload string            `json:"event_payload,omitempty"`
+	Concurrency  *Concurrency      `json:"concurrency,omitempty"`
 }
 
 func dispatchJob(ctx context.Context, f *fj, weftEndpoint, image string, cfg PersistedConfig, task *TaskSummary) error {
@@ -53,12 +76,19 @@ func dispatchJob(ctx context.Context, f *fj, weftEndpoint, image string, cfg Per
 	defer os.RemoveAll(cfgDir)
 
 	payload := taskCfg{
-		URL:       cfg.URL,
-		UUID:      cfg.UUID,
-		Token:     cfg.Token,
-		TaskID:    task.ID,
-		TaskToken: task.Token,
-		Workflow:  task.Workflow,
+		URL:          cfg.URL,
+		UUID:         cfg.UUID,
+		Token:        cfg.Token,
+		TaskID:       task.ID,
+		TaskToken:    task.Token,
+		Workflow:     task.Workflow,
+		Context:      task.Context,
+		Secrets:      task.Secrets,
+		Vars:         task.Vars,
+		Machine:      task.Machine,
+		Event:        task.Event,
+		EventPayload: task.EventPayload,
+		Concurrency:  task.Concurrency,
 	}
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -69,8 +99,8 @@ func dispatchJob(ctx context.Context, f *fj, weftEndpoint, image string, cfg Per
 	}
 
 	jobImage := image
-	if task.Image != "" {
-		jobImage = task.Image
+	if task.Image.Name != "" {
+		jobImage = task.Image.Name
 	}
 
 	endpointFlag := "--endpoint=" + weftEndpoint

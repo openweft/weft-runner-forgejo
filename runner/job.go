@@ -144,7 +144,9 @@ func dispatchJob(ctx context.Context, f *fj, weftEndpoint, image string, cfg Per
 		result = "FAILURE"
 		log.Printf("weft-runner-forgejo: vm %s wait error: %v → marking task failed", vmName, waitErr)
 	}
-	if err := f.updateTask(ctx, task.ID, result); err != nil {
+	updCtx, updCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer updCancel()
+	if err := f.updateTask(updCtx, task.ID, result); err != nil {
 		log.Printf("weft-runner-forgejo: updateTask: %v", err)
 	}
 	return nil

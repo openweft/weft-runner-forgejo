@@ -93,7 +93,10 @@ func (f *fj) connectCall(ctx context.Context, method string, req, resp any) erro
 		return err
 	}
 	defer r.Body.Close()
-	rb, _ := io.ReadAll(r.Body)
+	rb, readErr := io.ReadAll(r.Body)
+	if readErr != nil && r.StatusCode/100 == 2 {
+		return fmt.Errorf("read %s response: %w", method, readErr)
+	}
 	if r.StatusCode/100 != 2 {
 		// Connect error envelope: { "code": "...", "message": "..." }
 		var cErr struct {

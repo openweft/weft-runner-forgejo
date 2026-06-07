@@ -10,6 +10,14 @@ and this project aims to adhere to [Semantic Versioning](https://semver.org/spec
 ### Changed
 
 - Extend `TaskSummary` to mirror the Forgejo `runner.v1.Task` proto.
+- **`updateLog` ships real per-line rows.** Previously one row carried
+  the whole chunk as a single content string ; now we split on '\n'
+  and stamp each line with a UTC timestamp, matching the Forgejo UI's
+  rendering model. Empty trailing rows from a final newline are
+  dropped. Nil/empty chunks skip the RPC outright.
+- **doc.go status updated** : the rough-order TODO list is replaced
+  with a "Status (2026-06)" summary marking all seven runner-lifecycle
+  items as shipped.
 
 ## [v0.1.0] — 2026-05-30
 

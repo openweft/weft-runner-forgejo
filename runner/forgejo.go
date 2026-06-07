@@ -28,12 +28,13 @@
 //   - UpdateLog  — append log lines to a running task.
 //   - UpdateTask — terminal state transition.
 //
-// Today we implement Register + Declare fully (they're tiny). FetchTask /
-// UpdateLog / UpdateTask have HTTP plumbing in place but the message shape
-// is parked behind a TODO — the proto for those carries enough nested
-// optional fields that hand-coding the JSON shape is a maintenance hazard.
-// The right next step is to vendor the proto and generate the JSON tags
-// from it; that's a follow-up commit.
+// Register + Declare are tiny ; FetchTask / UpdateLog / UpdateTask carry
+// the runtime payload. The JSON shape is now stable enough that we
+// hand-code it — the upstream proto (gitea/runner-go) is a moving
+// target, vendoring it would force a re-pin every Forgejo release. The
+// invariant : every TaskSummary field we read has a Forgejo doc-stable
+// JSON name (`id`, `workflow_payload`, `vars`) ; every UpdateLog row
+// we write is one log line with a UTC timestamp.
 
 package runner
 
@@ -242,17 +243,44 @@ func (f *fj) fetchTask(ctx context.Context) (*TaskSummary, error) {
 	return out.Task, nil
 }
 
-// updateLog appends one chunk to the live task log. `index` is the running
-// byte offset Forgejo expects to track resends idempotently.
+// updateLog appends a chunk of in-VM stdout to the live task log. `index`
+// is the running ROW offset Forgejo expects to dedup resends (NOT a byte
+// offset — Forgejo's UpdateLog protocol counts rows). The caller bumps
+// index by len(rows) after a successful return.
 //
-// TODO(milestone-real-updatelog): proto carries `rows` (a list of log lines
-// with timestamps) not a flat byte chunk. Today we pack one row per call
-// containing the chunk as content. Replace with a real row stream once
-// we stream the in-VM stdout properly.
+// The proto's `rows` slice expects one log line per entry with its own
+// timestamp. We split the chunk on '\n' and stamp every line at "now"
+// — for in-VM streaming the chunk is short enough that all lines share
+// the same wallclock second, which is the resolution Forgejo's UI
+// renders anyway. Empty trailing element after a final newline is
+// dropped so the UI doesn't show phantom blank rows.
+//
+// A nil/empty chunk returns nil without an RPC — the caller's
+// `if len(buf) > 0 { updateLog(…) }` guard is the source of truth, but
+// defending here keeps a buggy caller from hammering Forgejo with empty
+// rows requests.
 func (f *fj) updateLog(ctx context.Context, taskID int64, chunk []byte, index int64) error {
+	if len(chunk) == 0 {
+		return nil
+	}
 	type row struct {
 		Time    time.Time `json:"time"`
 		Content string    `json:"content"`
+	}
+	now := time.Now().UTC()
+	lines := strings.Split(string(chunk), "\n")
+	// Drop the trailing empty element produced by Split when chunk ends
+	// with '\n'. Forgejo treats every row as a rendered line break, so
+	// we don't want a spurious blank at the end of every chunk.
+	if n := len(lines); n > 0 && lines[n-1] == "" {
+		lines = lines[:n-1]
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	rows := make([]row, 0, len(lines))
+	for _, ln := range lines {
+		rows = append(rows, row{Time: now, Content: ln})
 	}
 	body := struct {
 		TaskID int64 `json:"task_id"`
@@ -261,10 +289,7 @@ func (f *fj) updateLog(ctx context.Context, taskID int64, chunk []byte, index in
 	}{
 		TaskID: taskID,
 		Index:  index,
-		Rows: []row{{
-			Time:    time.Now().UTC(),
-			Content: string(chunk),
-		}},
+		Rows:   rows,
 	}
 	return f.connectCall(ctx, "UpdateLog", body, nil)
 }

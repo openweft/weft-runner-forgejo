@@ -13,37 +13,47 @@
 //
 // # Components
 //
-//	[Forgejo Service] ⇄ runner/github.go ⇄ runner/runner.go ⇄ runner/job.go ⇄ [weft cluster]
-//	         REST + long-poll       protocol         lifecycle           gRPC
+//	[Forgejo Service] ⇄ runner/forgejo.go ⇄ runner/runner.go ⇄ runner/job.go ⇄ [weft cluster]
+//	         Connect-over-JSON       lifecycle         per-task            gRPC
 //
-//   - runner/github.go: registers the runner against an org/repo/enterprise
-//     using a Personal Access Token or Forgejo App installation; long-polls the
-//     Actions Runtime API for assigned jobs; reports completion status.
+//   - runner/forgejo.go: registers the runner against an instance / org / repo
+//     using a runner registration token minted in the Forgejo admin UI ;
+//     long-polls FetchTask on the runner-v1 Connect service ; reports
+//     completion via UpdateTask.
 //   - runner/runner.go: the daemon loop — owns the connection to Forgejo, the
-//     connection to weft, and the per-job state machine.
-//   - runner/job.go: turns one job spec into a microVM lifecycle —
+//     connection to weft, and the per-task state machine.
+//   - runner/job.go: turns one task spec into a microVM lifecycle —
 //     RegisterMicroVM → StartVM → stream output → DeleteVM — with a cancel
-//     path tied to Forgejo's "cancel" event.
+//     path tied to Forgejo's task cancellation signal.
 //
 // # Sibling runners
 //
-// weft-runner-gitlab and weft-runner-forgejo share the lifecycle layer
-// (anything that talks to weft to spawn / drive / tear down a VM); the
-// per-platform code is small (each platform's polling protocol + job spec
-// envelope). When two of the three diverge enough to warrant it, the shared
-// "microVM job runtime" should split into its own sibling module they all
-// import.
+// All three runners (weft-runner-github, weft-runner-gitlab,
+// weft-runner-forgejo) share the lifecycle layer (anything that talks to
+// weft to spawn / drive / tear down a VM); the per-platform code is small
+// (each platform's polling protocol + task spec envelope). When the three
+// diverge enough to warrant it, the shared "microVM job runtime" should
+// split into its own sibling module they all import.
 //
-// # TODO (rough order)
+// # Status (2026-06)
 //
-//  1. Forgejo CI runner registration via REST (POST /orgs/{org}/actions/runners/registration-token).
-//  2. Runner-config persistence + ephemeral-runner semantics.
-//  3. Long-poll loop against the Actions Runtime; decode job assignment.
-//  4. weft microVM spawn: ImageStore + RegisterMicroVM via weft-client.
-//  5. In-VM agent (small Go binary baked into the rootfs) that fetches the
-//     runner binary, registers with the per-job token, runs, exits.
-//  6. Log streaming back to the controlling weft-runner-forgejo process and
-//     thence to Forgejo via the runtime API.
-//  7. Cleanup on cancel + idle timeout.
+//  1. ✓ Forgejo CI runner registration via Connect-over-JSON (Register
+//     + Declare against the Forgejo runner-v1 service).
+//  2. ✓ Runner-config persistence + ephemeral-runner semantics
+//     (PersistedConfig + per-task FetchTask poll).
+//  3. ✓ Long-poll loop : the Run worker calls FetchTask, dispatches to
+//     a microVM, then drives UpdateLog + UpdateTask to closure.
+//  4. ✓ weft microVM spawn via dispatchJob → weft-client RegisterMicroVM.
+//  5. ✓ In-VM agent : the runner image ships the Forgejo act_runner
+//     reading the per-task spec from /run/weft/cfg/. Image side ; this
+//     daemon only puts the file there via the share.
+//  6. ✓ Log streaming : updateLog splits the in-VM stdout into per-line
+//     rows with UTC timestamps and ships them through Forgejo's
+//     UpdateLog RPC. updateTask transitions to SUCCESS / FAILURE /
+//     CANCELLED on completion.
+//  7. ✓ Cleanup on cancel + idle timeout : worker goroutines honour ctx.
 //
+// All seven items shipped. Subsequent work focuses on observability
+// (per-job timing, queue-depth metrics) and on the shared microVM-job
+// runtime split mentioned above — neither is functional surface.
 package main

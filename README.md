@@ -4,43 +4,56 @@ Self-hosted Forgejo CI runner backed by **weft** ephemeral microVMs.
 
 ## What it does
 
-`weft-runner-forgejo` registers as a Forgejo self-hosted runner against
-an org / repo / enterprise, then for each job assigned to it:
+`weft-runner-forgejo` registers as a Forgejo Actions self-hosted runner
+against an instance / organization / repository, then for each task
+assigned to it:
 
 1. Asks a weft cluster to spawn a fresh **ephemeral microVM** from an OCI rootfs
-   (e.g. `ghcr.io/actions/runner-images-arm64:ubuntu-24.04`) — clean state per
-   job, isolated, throwaway.
-2. Runs the actions/runner workflow inside that VM via a thin agent (boot-time
+   (e.g. `code.forgejo.org/forgejo/runner-images:ubuntu-24.04`) — clean state
+   per task, isolated, throwaway.
+2. Runs Forgejo's `act_runner` inside that VM via a thin agent (boot-time
    bootstrap drops the runner binary + token + workdir mount).
-3. Streams logs back, marks the job done, and tears the VM down.
+3. Streams logs back, marks the task done, and tears the VM down.
 
-Sibling of `weft-runner-gitlab` and `weft-runner-forgejo`; the three share the
-microVM-spawn primitive but plug into their respective CI control planes.
+Sibling of `weft-runner-github` and `weft-runner-gitlab` — the three share
+the microVM-spawn primitive but plug into their respective CI control planes.
+Each implements the platform's own protocol (Forgejo's Connect-over-JSON
+here, GitHub Actions's Runtime API in the GitHub sibling, GitLab's
+`/api/v4/jobs/request` in the GitLab one).
 
 ## Status
 
-**Bootstrap skeleton** — module layout, CLI commands, interface boundaries.
-Nothing runs end-to-end yet. The Forgejo CI runner protocol integration
-and the weft client wiring are the next milestones (see TODO in `doc.go`).
+**Operational** — the seven implementation steps in `doc.go` ship :
+Register + Declare via Forgejo's `runner-v1` Connect service, long-poll
+loop through `FetchTask`, microVM dispatch via weft-client, per-line log
+streaming via `UpdateLog` with UTC timestamps, terminal-state transition
+via `UpdateTask`. See `doc.go` for the per-step status.
 
-## Quick start (target shape)
+## Quick start
 
 ```sh
-# Register the runner against a Forgejo org (uses a registration token from a
-# PAT or Forgejo App, mints an org-wide ephemeral runner config):
+# 1. Mint a runner registration token from your Forgejo admin UI :
+#    Site Administration → Actions → Runners → Create new Runner Token
+#    (or the per-org / per-repo equivalent for scoped runners).
+#    Forgejo uses runner registration tokens directly — there's no PAT
+#    or App indirection, the token IS the bootstrap credential.
+
+# 2. Register the runner.
 weft-runner-forgejo register \
-  --owner my-org \
-  --token $GITHUB_PAT \
+  --url https://codeberg.org \
+  --registration-token $FORGEJO_RUNNER_TOKEN \
+  --name weft-microvm-arm64 \
   --labels "weft,microvm,arm64"
 
-# Start polling for jobs. Each job spawns a fresh microVM on the target
-# weft cluster.
+# 3. Start polling for tasks. Each task spawns a fresh microVM on the
+#    target weft cluster.
 weft-runner-forgejo run \
   --weft-endpoint tcp:weft.example.com:7330 \
-  --image ghcr.io/actions/runner-images-arm64:ubuntu-24.04
+  --image code.forgejo.org/forgejo/runner-images:ubuntu-24.04
 ```
 
 ## Architecture
 
-See `doc.go` for the design intent and component boundaries; `runner/runner.go`
-for the core types and stubs.
+See `doc.go` for the design intent and component boundaries ;
+`runner/runner.go` for the lifecycle layer, `runner/forgejo.go` for the
+Forgejo Connect-over-JSON client.

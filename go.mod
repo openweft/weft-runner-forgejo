@@ -1,6 +1,6 @@
 module github.com/openweft/weft-runner-forgejo
 
-go 1.25.0
+go 1.26.4
 
 require github.com/spf13/cobra v1.8.1
 

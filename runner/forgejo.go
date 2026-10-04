@@ -119,10 +119,10 @@ func (f *fj) connectCall(ctx context.Context, method string, req, resp any) erro
 
 // registerRequest is the body Forgejo's RunnerService.Register expects.
 type registerReqMsg struct {
-	Token        string   `json:"token"`                  // registration token (one-shot)
-	Name         string   `json:"name"`
-	Version      string   `json:"version"`
-	Labels       []string `json:"labels"`
+	Token   string   `json:"token"` // registration token (one-shot)
+	Name    string   `json:"name"`
+	Version string   `json:"version"`
+	Labels  []string `json:"labels"`
 }
 
 // registerResponse mirrors RunnerService.Register's reply. The persisted

@@ -22,8 +22,8 @@ import (
 
 // RegisterOptions are the inputs to `weft-runner-forgejo register`.
 type RegisterOptions struct {
-	URL               string   // https://codeberg.org or self-hosted
-	RegistrationToken string   // one-shot token from the Forgejo admin UI
+	URL               string // https://codeberg.org or self-hosted
+	RegistrationToken string // one-shot token from the Forgejo admin UI
 	Name              string
 	Labels            []string
 	ConfigFile        string

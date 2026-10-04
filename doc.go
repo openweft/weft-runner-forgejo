@@ -13,18 +13,18 @@
 //
 // # Components
 //
-//	[Forgejo Service] ⇄ runner/forgejo.go ⇄ runner/runner.go ⇄ runner/job.go ⇄ [weft cluster]
-//	         Connect-over-JSON       lifecycle         per-task            gRPC
+//		[Forgejo Service] ⇄ runner/forgejo.go ⇄ runner/runner.go ⇄ runner/job.go ⇄ [weft cluster]
+//		         Connect-over-JSON       lifecycle         per-task            gRPC
 //
-//   - runner/forgejo.go: registers the runner against an instance / org / repo
-//     using a runner registration token minted in the Forgejo admin UI ;
-//     long-polls FetchTask on the runner-v1 Connect service ; reports
-//     completion via UpdateTask.
-//   - runner/runner.go: the daemon loop — owns the connection to Forgejo, the
-//     connection to weft, and the per-task state machine.
-//   - runner/job.go: turns one task spec into a microVM lifecycle —
-//     RegisterMicroVM → StartVM → stream output → DeleteVM — with a cancel
-//     path tied to Forgejo's task cancellation signal.
+//	  - runner/forgejo.go: registers the runner against an instance / org / repo
+//	    using a runner registration token minted in the Forgejo admin UI ;
+//	    long-polls FetchTask on the runner-v1 Connect service ; reports
+//	    completion via UpdateTask.
+//	  - runner/runner.go: the daemon loop — owns the connection to Forgejo, the
+//	    connection to weft, and the per-task state machine.
+//	  - runner/job.go: turns one task spec into a microVM lifecycle —
+//	    RegisterMicroVM → StartVM → stream output → DeleteVM — with a cancel
+//	    path tied to Forgejo's task cancellation signal.
 //
 // # Sibling runners
 //

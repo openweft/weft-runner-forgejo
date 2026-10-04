@@ -14,9 +14,9 @@ import (
 
 // PersistedConfig is the on-disk shape of `weft-runner-forgejo register`.
 type PersistedConfig struct {
-	URL    string   `json:"url"`        // https://codeberg.org or self-hosted
-	UUID   string   `json:"uuid"`       // runner identity
-	Token  string   `json:"token"`      // long-lived runner token
+	URL    string   `json:"url"`   // https://codeberg.org or self-hosted
+	UUID   string   `json:"uuid"`  // runner identity
+	Token  string   `json:"token"` // long-lived runner token
 	Name   string   `json:"name,omitempty"`
 	Labels []string `json:"labels,omitempty"`
 }
